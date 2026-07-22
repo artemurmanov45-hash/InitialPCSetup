@@ -1,7 +1,7 @@
 ﻿<#
 .SYNOPSIS
     Бэкап, настройка IP, ввод в домен, прокси, выбор OU.
-    Версия 2.2.0 (с предварительным просмотром и подтверждением)
+    Версия 2.3.0 (маска в формате 255.255.255.0, обновлены подписи DNS)
 #>
 
 # === ПРОВЕРКА ПРАВ АДМИНИСТРАТОРА И АВТО-ПЕРЕЗАПУСК ===
@@ -38,9 +38,34 @@ function Test-ValidIP {
     return ($IP -match $regex)
 }
 
-function Test-ValidPrefix {
-    param([string]$Prefix)
-    return ($Prefix -match '^([0-9]|[1-2][0-9]|3[0-2])$' -and [int]$Prefix -ge 1 -and [int]$Prefix -le 32)
+# НОВАЯ ФУНКЦИЯ: проверка корректности маски подсети (255.255.255.0 и т.п.)
+function Test-ValidSubnetMask {
+    param([string]$Mask)
+    # Проверяем формат IP
+    if (-not (Test-ValidIP $Mask)) { return $false }
+    # Разбиваем на октеты
+    $octets = $Mask.Split('.')
+    $binary = ''
+    foreach ($octet in $octets) {
+        $binary += [Convert]::ToString([int]$octet, 2).PadLeft(8, '0')
+    }
+    # Маска должна быть вида: сначала единицы, потом нули (непрерывно)
+    if ($binary -match '^1+0+$') {
+        return $true
+    } else {
+        return $false
+    }
+}
+
+# Функция преобразования маски из точечной нотации в длину префикса
+function Convert-MaskToPrefixLength {
+    param([string]$Mask)
+    $octets = $Mask.Split('.')
+    $binary = ''
+    foreach ($octet in $octets) {
+        $binary += [Convert]::ToString([int]$octet, 2).PadLeft(8, '0')
+    }
+    return ($binary -replace '0','').Length
 }
 
 function Test-ValidComputerName {
@@ -69,7 +94,7 @@ Add-Type -AssemblyName PresentationFramework
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Мастер первоначальной настройки ПК v2.2.0" Height="500" Width="580"
+        Title="Мастер первоначальной настройки ПК v2.3.0" Height="500" Width="580"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
         FontFamily="Segoe UI" FontSize="12">
     <Grid Margin="10">
@@ -116,16 +141,18 @@ Add-Type -AssemblyName PresentationFramework
                         <Label Grid.Row="0" Grid.Column="0" Content="Новый IP-адрес:" VerticalAlignment="Center"/>
                         <TextBox x:Name="txtIP" Grid.Row="0" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
 
-                        <Label Grid.Row="1" Grid.Column="0" Content="Новая маска (префикс):" VerticalAlignment="Center"/>
-                        <TextBox x:Name="txtPrefix" Grid.Row="1" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center" Text="24" Width="60" HorizontalAlignment="Left"/>
+                        <!-- Изменено: поле для маски в формате 255.255.255.0 -->
+                        <Label Grid.Row="1" Grid.Column="0" Content="Новая маска подсети:" VerticalAlignment="Center"/>
+                        <TextBox x:Name="txtMask" Grid.Row="1" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center" Text="255.255.255.0" Width="120" HorizontalAlignment="Left"/>
 
                         <Label Grid.Row="2" Grid.Column="0" Content="Новый шлюз:" VerticalAlignment="Center"/>
                         <TextBox x:Name="txtGateway" Grid.Row="2" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
 
-                        <Label Grid.Row="3" Grid.Column="0" Content="Новый DNS (предпоч.):" VerticalAlignment="Center"/>
+                        <!-- Изменены подписи DNS -->
+                        <Label Grid.Row="3" Grid.Column="0" Content="Предпочитаемый DNS-сервер:" VerticalAlignment="Center"/>
                         <TextBox x:Name="txtDNS1" Grid.Row="3" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
 
-                        <Label Grid.Row="4" Grid.Column="0" Content="Новый DNS (запасной):" VerticalAlignment="Center"/>
+                        <Label Grid.Row="4" Grid.Column="0" Content="Альтернативный DNS-сервер:" VerticalAlignment="Center"/>
                         <TextBox x:Name="txtDNS2" Grid.Row="4" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
                     </Grid>
                 </GroupBox>
@@ -199,7 +226,7 @@ $window = [Windows.Markup.XamlReader]::Load($reader)
 $cmbAdapters = $window.FindName("cmbAdapters")
 $btnRefreshAdapters = $window.FindName("btnRefreshAdapters")
 $txtIP = $window.FindName("txtIP")
-$txtPrefix = $window.FindName("txtPrefix")
+$txtMask = $window.FindName("txtMask")             # новое поле для маски
 $txtGateway = $window.FindName("txtGateway")
 $txtDNS1 = $window.FindName("txtDNS1")
 $txtDNS2 = $window.FindName("txtDNS2")
@@ -252,16 +279,15 @@ $step1.Visibility = [System.Windows.Visibility]::Visible
 $step2.Visibility = [System.Windows.Visibility]::Collapsed
 
 # -----------------------------------------------------------------------
-# НОВОЕ: Функция для отображения окна подтверждения
+# Функция для отображения окна подтверждения
 # -----------------------------------------------------------------------
 function Show-ConfirmationWindow {
     param(
-        $CurrentIP, $CurrentPrefix, $CurrentGateway, $CurrentDNS1, $CurrentDNS2,
-        $NewIP, $NewPrefix, $NewGateway, $NewDNS1, $NewDNS2,
+        $CurrentIP, $CurrentMask, $CurrentGateway, $CurrentDNS1, $CurrentDNS2,
+        $NewIP, $NewMask, $NewGateway, $NewDNS1, $NewDNS2,
         $CurrentName, $NewName, $Domain, $OU, $ProxyEnabled, $ProxyAddr, $ProxyPort
     )
 
-    # Создаём XAML для окна подтверждения
     $confirmXaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -306,19 +332,19 @@ function Show-ConfirmationWindow {
                 <TextBlock x:Name="lblCurrentIP" Grid.Row="1" Grid.Column="1"/>
                 <TextBlock x:Name="lblNewIP" Grid.Row="1" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
 
-                <TextBlock Grid.Row="2" Grid.Column="0" Text="Маска (префикс)"/>
-                <TextBlock x:Name="lblCurrentPrefix" Grid.Row="2" Grid.Column="1"/>
-                <TextBlock x:Name="lblNewPrefix" Grid.Row="2" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="Маска подсети"/>
+                <TextBlock x:Name="lblCurrentMask" Grid.Row="2" Grid.Column="1"/>
+                <TextBlock x:Name="lblNewMask" Grid.Row="2" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
 
                 <TextBlock Grid.Row="3" Grid.Column="0" Text="Шлюз"/>
                 <TextBlock x:Name="lblCurrentGateway" Grid.Row="3" Grid.Column="1"/>
                 <TextBlock x:Name="lblNewGateway" Grid.Row="3" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
 
-                <TextBlock Grid.Row="4" Grid.Column="0" Text="DNS1"/>
+                <TextBlock Grid.Row="4" Grid.Column="0" Text="Предпочитаемый DNS"/>
                 <TextBlock x:Name="lblCurrentDNS1" Grid.Row="4" Grid.Column="1"/>
                 <TextBlock x:Name="lblNewDNS1" Grid.Row="4" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
 
-                <TextBlock Grid.Row="5" Grid.Column="0" Text="DNS2"/>
+                <TextBlock Grid.Row="5" Grid.Column="0" Text="Альтернативный DNS"/>
                 <TextBlock x:Name="lblCurrentDNS2" Grid.Row="5" Grid.Column="1"/>
                 <TextBlock x:Name="lblNewDNS2" Grid.Row="5" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
 
@@ -354,8 +380,8 @@ function Show-ConfirmationWindow {
     # Получаем элементы
     $lblCurrentIP = $confirmWindow.FindName("lblCurrentIP")
     $lblNewIP = $confirmWindow.FindName("lblNewIP")
-    $lblCurrentPrefix = $confirmWindow.FindName("lblCurrentPrefix")
-    $lblNewPrefix = $confirmWindow.FindName("lblNewPrefix")
+    $lblCurrentMask = $confirmWindow.FindName("lblCurrentMask")
+    $lblNewMask = $confirmWindow.FindName("lblNewMask")
     $lblCurrentGateway = $confirmWindow.FindName("lblCurrentGateway")
     $lblNewGateway = $confirmWindow.FindName("lblNewGateway")
     $lblCurrentDNS1 = $confirmWindow.FindName("lblCurrentDNS1")
@@ -373,8 +399,8 @@ function Show-ConfirmationWindow {
     # Заполняем значения
     $lblCurrentIP.Text = if ($CurrentIP) { $CurrentIP } else { "(не задан)" }
     $lblNewIP.Text = $NewIP
-    $lblCurrentPrefix.Text = if ($CurrentPrefix) { $CurrentPrefix } else { "(не задан)" }
-    $lblNewPrefix.Text = $NewPrefix
+    $lblCurrentMask.Text = if ($CurrentMask) { $CurrentMask } else { "(не задан)" }
+    $lblNewMask.Text = $NewMask
     $lblCurrentGateway.Text = if ($CurrentGateway) { $CurrentGateway } else { "(не задан)" }
     $lblNewGateway.Text = $NewGateway
     $lblCurrentDNS1.Text = if ($CurrentDNS1) { $CurrentDNS1 } else { "(не задан)" }
@@ -407,19 +433,16 @@ function Show-ConfirmationWindow {
         $confirmWindow.Close()
     })
 
-    # Показываем окно
     $confirmWindow.ShowDialog() | Out-Null
-
     return $script:confirmResult
 }
-# -----------------------------------------------------------------------
 
 # Обработчик кнопки "Далее"
 $btnNext.Add_Click({
     if ($step1.Visibility -eq [System.Windows.Visibility]::Visible) {
-        # --- ШАГ 1: Валидация IP-параметров ---
+        # --- ШАГ 1: Валидация IP, маски, шлюза, DNS ---
         $ip = $txtIP.Text.Trim()
-        $prefix = $txtPrefix.Text.Trim()
+        $mask = $txtMask.Text.Trim()
         $gw = $txtGateway.Text.Trim()
         $dns1 = $txtDNS1.Text.Trim()
         $dns2 = $txtDNS2.Text.Trim()
@@ -428,8 +451,8 @@ $btnNext.Add_Click({
             [System.Windows.MessageBox]::Show("Некорректный IP-адрес.", "Ошибка", "OK", "Error")
             return
         }
-        if (-not (Test-ValidPrefix $prefix)) {
-            [System.Windows.MessageBox]::Show("Некорректный префикс (1-32).", "Ошибка", "OK", "Error")
+        if (-not (Test-ValidSubnetMask $mask)) {
+            [System.Windows.MessageBox]::Show("Некорректная маска подсети (пример: 255.255.255.0).", "Ошибка", "OK", "Error")
             return
         }
         if (-not (Test-ValidIP $gw)) {
@@ -437,11 +460,11 @@ $btnNext.Add_Click({
             return
         }
         if (-not (Test-ValidIP $dns1)) {
-            [System.Windows.MessageBox]::Show("Некорректный DNS1.", "Ошибка", "OK", "Error")
+            [System.Windows.MessageBox]::Show("Некорректный адрес предпочитаемого DNS-сервера.", "Ошибка", "OK", "Error")
             return
         }
         if ($dns2 -and -not (Test-ValidIP $dns2)) {
-            [System.Windows.MessageBox]::Show("Некорректный DNS2 (если не используется, оставьте пустым).", "Ошибка", "OK", "Error")
+            [System.Windows.MessageBox]::Show("Некорректный адрес альтернативного DNS-сервера (если не используется, оставьте пустым).", "Ошибка", "OK", "Error")
             return
         }
 
@@ -487,35 +510,40 @@ $btnNext.Add_Click({
             if ($res -eq 'No') { return }
         }
 
-        # ---------------------------------------------------------------
-        # НОВОЕ: Получение текущих значений для отображения в окне подтверждения
-        # ---------------------------------------------------------------
-        # Определяем индекс выбранного адаптера
+        # Получение текущих значений для окна подтверждения
         $selectedAdapterString = $cmbAdapters.SelectedItem
         $adapterIndex = [int]($selectedAdapterString -split '\(Index ')[1] -replace '\)',''
-
-        # Текущие сетевые параметры
         $currentIPObj = Get-NetIPAddress -InterfaceIndex $adapterIndex -AddressFamily IPv4 | Where-Object { $_.PrefixOrigin -ne 'WellKnown' } | Select-Object -First 1
         $currentIP = if ($currentIPObj) { $currentIPObj.IPAddress } else { $null }
         $currentPrefix = if ($currentIPObj) { $currentIPObj.PrefixLength } else { $null }
+        # Преобразуем текущий префикс в маску для отображения
+        $currentMask = if ($currentPrefix) {
+            $bits = '1' * $currentPrefix + '0' * (32 - $currentPrefix)
+            $octets = @()
+            for ($i=0; $i -lt 4; $i++) {
+                $octet = [Convert]::ToByte($bits.Substring($i*8, 8), 2)
+                $octets += $octet
+            }
+            $octets -join '.'
+        } else { $null }
+
         $currentGatewayObj = Get-NetRoute -InterfaceIndex $adapterIndex -DestinationPrefix '0.0.0.0/0' | Select-Object -First 1
         $currentGateway = if ($currentGatewayObj) { $currentGatewayObj.NextHop } else { $null }
         $currentDNS = Get-DnsClientServerAddress -InterfaceIndex $adapterIndex -AddressFamily IPv4 | Select-Object -First 1
         $currentDNS1 = if ($currentDNS.ServerAddresses.Count -gt 0) { $currentDNS.ServerAddresses[0] } else { $null }
         $currentDNS2 = if ($currentDNS.ServerAddresses.Count -gt 1) { $currentDNS.ServerAddresses[1] } else { $null }
-
-        # Текущее имя компьютера
         $currentName = $env:COMPUTERNAME
 
+        # Получаем новую маску для отображения (она уже введена в txtMask)
+        $newMask = $txtMask.Text.Trim()
+
         # Показываем окно подтверждения
-        $confirmResult = Show-ConfirmationWindow -CurrentIP $currentIP -CurrentPrefix $currentPrefix -CurrentGateway $currentGateway -CurrentDNS1 $currentDNS1 -CurrentDNS2 $currentDNS2 -NewIP $txtIP.Text.Trim() -NewPrefix $txtPrefix.Text.Trim() -NewGateway $txtGateway.Text.Trim() -NewDNS1 $txtDNS1.Text.Trim() -NewDNS2 $txtDNS2.Text.Trim() -CurrentName $currentName -NewName $compName -Domain $domain -OU $ou -ProxyEnabled $proxyEnabled -ProxyAddr $proxyAddr -ProxyPort $proxyPort
+        $confirmResult = Show-ConfirmationWindow -CurrentIP $currentIP -CurrentMask $currentMask -CurrentGateway $currentGateway -CurrentDNS1 $currentDNS1 -CurrentDNS2 $currentDNS2 -NewIP $txtIP.Text.Trim() -NewMask $newMask -NewGateway $txtGateway.Text.Trim() -NewDNS1 $txtDNS1.Text.Trim() -NewDNS2 $txtDNS2.Text.Trim() -CurrentName $currentName -NewName $compName -Domain $domain -OU $ou -ProxyEnabled $proxyEnabled -ProxyAddr $proxyAddr -ProxyPort $proxyPort
 
         if ($confirmResult) {
-            # Пользователь подтвердил – закрываем мастер с успехом
             $window.DialogResult = $true
             $window.Close()
         } else {
-            # Пользователь отменил – ничего не делаем, остаёмся на шаге 2
             return
         }
     }
@@ -550,7 +578,8 @@ if ($result -ne $true) {
 $selectedAdapterString = $cmbAdapters.SelectedItem
 $adapterIndex = [int]($selectedAdapterString -split '\(Index ')[1] -replace '\)',''
 $newIP = $txtIP.Text.Trim()
-$prefixLength = [int]$txtPrefix.Text.Trim()
+$newMask = $txtMask.Text.Trim()
+$prefixLength = Convert-MaskToPrefixLength -Mask $newMask   # преобразуем маску в длину префикса
 $gateway = $txtGateway.Text.Trim()
 $dns1 = $txtDNS1.Text.Trim()
 $dns2 = $txtDNS2.Text.Trim()
@@ -563,7 +592,7 @@ $proxyPort = $txtProxyPort.Text.Trim()
 
 # Логируем в консоль
 Write-Host "Выбран адаптер: $selectedAdapterString" -ForegroundColor Cyan
-Write-Host "IP: $newIP/$prefixLength, GW: $gateway, DNS: $dns1, $dns2"
+Write-Host "IP: $newIP/$newMask (префикс $prefixLength), GW: $gateway, DNS: $dns1, $dns2"
 Write-Host "Имя: $newName, Домен: $domain, OU: $ou"
 if ($proxyEnabled) { Write-Host "Прокси: $proxyAddress`:$proxyPort" }
 
@@ -585,7 +614,7 @@ DNS серверы: $($currentDNS.ServerAddresses -join ', ')
 "@ | Out-File -FilePath $backupFile -Encoding UTF8
 Write-Host "Бэкап сохранён в: $backupFile" -ForegroundColor Green
 
-# --- Настройка IP ---
+# --- Настройка IP (используем PrefixLength) ---
 Write-Host "`nНазначение статического IP..." -ForegroundColor Yellow
 $progressBar.Value = 10
 Get-NetIPAddress -InterfaceIndex $adapterIndex -AddressFamily IPv4 |
@@ -593,7 +622,7 @@ Get-NetIPAddress -InterfaceIndex $adapterIndex -AddressFamily IPv4 |
     Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
 New-NetIPAddress -InterfaceIndex $adapterIndex -IPAddress $newIP -PrefixLength $prefixLength -DefaultGateway $gateway | Out-Null
 Set-DnsClientServerAddress -InterfaceIndex $adapterIndex -ServerAddresses ($dns1, $dns2) | Out-Null
-Write-Host "IP $newIP/$prefixLength, шлюз $gateway, DNS $dns1 $dns2 применены." -ForegroundColor Green
+Write-Host "IP $newIP/$newMask (префикс $prefixLength), шлюз $gateway, DNS $dns1 $dns2 применены." -ForegroundColor Green
 $progressBar.Value = 30
 
 # --- Настройка прокси ---
@@ -650,7 +679,8 @@ $logFile = "$backupDir\SetupLog_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
 Компьютер: $currentName -> $newName
 Домен: $domain
 OU: $ou
-Новый IP: $newIP/$prefixLength
+Новый IP: $newIP
+Новая маска: $newMask (префикс $prefixLength)
 Шлюз: $gateway
 DNS1: $dns1
 DNS2: $dns2
