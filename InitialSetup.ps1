@@ -4,12 +4,20 @@
     Версия 2.0 (с улучшениями)
 #>
 
-# Проверка прав администратора
-if (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
-    Write-Host "ОШИБКА: Запустите скрипт от имени Администратора!" -ForegroundColor Red
-    pause
-    exit 1
+# === ПРОВЕРКА ПРАВ АДМИНИСТРАТОРА И АВТО-ПЕРЕЗАПУСК ===
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
+
+if (-not $isAdmin) {
+    Write-Host "Запрашиваем права администратора..." -ForegroundColor Yellow
+    Start-Sleep -Milliseconds 500
+    
+    $scriptPath = "`"" + $MyInvocation.MyCommand.Path + "`""
+    $arguments = "-NoProfile -ExecutionPolicy RemoteSigned -File $scriptPath"
+    Start-Process powershell -Verb RunAs -ArgumentList $arguments
+    
+    exit
 }
+# --- Конец проверки ---
 
 # === 1. БЭКАП ===
 $backupDir = "$env:USERPROFILE\Desktop\NetworkBackup"
