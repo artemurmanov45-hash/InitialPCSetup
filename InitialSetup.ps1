@@ -1,7 +1,7 @@
 ﻿<#
 .SYNOPSIS
     Бэкап, настройка IP, ввод в домен, прокси, выбор OU.
-    Версия 2.1 (двухшаговый мастер)
+    Версия 2.2.0 (с предварительным просмотром и подтверждением)
 #>
 
 # === ПРОВЕРКА ПРАВ АДМИНИСТРАТОРА И АВТО-ПЕРЕЗАПУСК ===
@@ -69,7 +69,7 @@ Add-Type -AssemblyName PresentationFramework
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Мастер первоначальной настройки ПК v2.1" Height="500" Width="580"
+        Title="Мастер первоначальной настройки ПК v2.2.0" Height="500" Width="580"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
         FontFamily="Segoe UI" FontSize="12">
     <Grid Margin="10">
@@ -251,9 +251,171 @@ $btnNext.Content = "Далее"
 $step1.Visibility = [System.Windows.Visibility]::Visible
 $step2.Visibility = [System.Windows.Visibility]::Collapsed
 
+# -----------------------------------------------------------------------
+# НОВОЕ: Функция для отображения окна подтверждения
+# -----------------------------------------------------------------------
+function Show-ConfirmationWindow {
+    param(
+        $CurrentIP, $CurrentPrefix, $CurrentGateway, $CurrentDNS1, $CurrentDNS2,
+        $NewIP, $NewPrefix, $NewGateway, $NewDNS1, $NewDNS2,
+        $CurrentName, $NewName, $Domain, $OU, $ProxyEnabled, $ProxyAddr, $ProxyPort
+    )
+
+    # Создаём XAML для окна подтверждения
+    $confirmXaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Подтверждение настроек" Height="450" Width="550"
+        WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
+        FontFamily="Segoe UI" FontSize="12">
+    <Grid Margin="15">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="Проверьте введённые параметры перед применением:" FontWeight="Bold" FontSize="14" Margin="0,0,0,10"/>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Параметр" FontWeight="Bold" Margin="0,0,10,0"/>
+                <TextBlock Grid.Row="0" Grid.Column="1" Text="Текущее значение" FontWeight="Bold" Margin="0,0,10,0"/>
+                <TextBlock Grid.Row="0" Grid.Column="2" Text="Новое значение" FontWeight="Bold"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="IP-адрес"/>
+                <TextBlock x:Name="lblCurrentIP" Grid.Row="1" Grid.Column="1"/>
+                <TextBlock x:Name="lblNewIP" Grid.Row="1" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="Маска (префикс)"/>
+                <TextBlock x:Name="lblCurrentPrefix" Grid.Row="2" Grid.Column="1"/>
+                <TextBlock x:Name="lblNewPrefix" Grid.Row="2" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
+
+                <TextBlock Grid.Row="3" Grid.Column="0" Text="Шлюз"/>
+                <TextBlock x:Name="lblCurrentGateway" Grid.Row="3" Grid.Column="1"/>
+                <TextBlock x:Name="lblNewGateway" Grid.Row="3" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
+
+                <TextBlock Grid.Row="4" Grid.Column="0" Text="DNS1"/>
+                <TextBlock x:Name="lblCurrentDNS1" Grid.Row="4" Grid.Column="1"/>
+                <TextBlock x:Name="lblNewDNS1" Grid.Row="4" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
+
+                <TextBlock Grid.Row="5" Grid.Column="0" Text="DNS2"/>
+                <TextBlock x:Name="lblCurrentDNS2" Grid.Row="5" Grid.Column="1"/>
+                <TextBlock x:Name="lblNewDNS2" Grid.Row="5" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
+
+                <TextBlock Grid.Row="6" Grid.Column="0" Text="Имя компьютера"/>
+                <TextBlock x:Name="lblCurrentName" Grid.Row="6" Grid.Column="1"/>
+                <TextBlock x:Name="lblNewName" Grid.Row="6" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
+
+                <TextBlock Grid.Row="7" Grid.Column="0" Text="Домен"/>
+                <TextBlock x:Name="lblDomain" Grid.Row="7" Grid.Column="1" Text="(не применимо)"/>
+                <TextBlock x:Name="lblNewDomain" Grid.Row="7" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
+
+                <TextBlock Grid.Row="8" Grid.Column="0" Text="OU"/>
+                <TextBlock x:Name="lblOU" Grid.Row="8" Grid.Column="1" Text="(не применимо)"/>
+                <TextBlock x:Name="lblNewOU" Grid.Row="8" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
+
+                <TextBlock Grid.Row="9" Grid.Column="0" Text="Прокси"/>
+                <TextBlock x:Name="lblProxy" Grid.Row="9" Grid.Column="1" Text="(не применимо)"/>
+                <TextBlock x:Name="lblNewProxy" Grid.Row="9" Grid.Column="2" FontWeight="Bold" Foreground="Green"/>
+            </Grid>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,15,0,0">
+            <Button x:Name="btnConfirmApply" Content="Применить" Width="100" Height="30" Margin="0,0,10,0" IsDefault="True"/>
+            <Button x:Name="btnConfirmCancel" Content="Отмена" Width="100" Height="30" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>
+"@
+
+    $confirmReader = New-Object System.Xml.XmlNodeReader $confirmXaml
+    $confirmWindow = [Windows.Markup.XamlReader]::Load($confirmReader)
+
+    # Получаем элементы
+    $lblCurrentIP = $confirmWindow.FindName("lblCurrentIP")
+    $lblNewIP = $confirmWindow.FindName("lblNewIP")
+    $lblCurrentPrefix = $confirmWindow.FindName("lblCurrentPrefix")
+    $lblNewPrefix = $confirmWindow.FindName("lblNewPrefix")
+    $lblCurrentGateway = $confirmWindow.FindName("lblCurrentGateway")
+    $lblNewGateway = $confirmWindow.FindName("lblNewGateway")
+    $lblCurrentDNS1 = $confirmWindow.FindName("lblCurrentDNS1")
+    $lblNewDNS1 = $confirmWindow.FindName("lblNewDNS1")
+    $lblCurrentDNS2 = $confirmWindow.FindName("lblCurrentDNS2")
+    $lblNewDNS2 = $confirmWindow.FindName("lblNewDNS2")
+    $lblCurrentName = $confirmWindow.FindName("lblCurrentName")
+    $lblNewName = $confirmWindow.FindName("lblNewName")
+    $lblNewDomain = $confirmWindow.FindName("lblNewDomain")
+    $lblNewOU = $confirmWindow.FindName("lblNewOU")
+    $lblNewProxy = $confirmWindow.FindName("lblNewProxy")
+    $btnConfirmApply = $confirmWindow.FindName("btnConfirmApply")
+    $btnConfirmCancel = $confirmWindow.FindName("btnConfirmCancel")
+
+    # Заполняем значения
+    $lblCurrentIP.Text = if ($CurrentIP) { $CurrentIP } else { "(не задан)" }
+    $lblNewIP.Text = $NewIP
+    $lblCurrentPrefix.Text = if ($CurrentPrefix) { $CurrentPrefix } else { "(не задан)" }
+    $lblNewPrefix.Text = $NewPrefix
+    $lblCurrentGateway.Text = if ($CurrentGateway) { $CurrentGateway } else { "(не задан)" }
+    $lblNewGateway.Text = $NewGateway
+    $lblCurrentDNS1.Text = if ($CurrentDNS1) { $CurrentDNS1 } else { "(не задан)" }
+    $lblNewDNS1.Text = $NewDNS1
+    $lblCurrentDNS2.Text = if ($CurrentDNS2) { $CurrentDNS2 } else { "(не задан)" }
+    $lblNewDNS2.Text = if ($NewDNS2) { $NewDNS2 } else { "(не указан)" }
+    $lblCurrentName.Text = $CurrentName
+    $lblNewName.Text = $NewName
+    $lblNewDomain.Text = $Domain
+    $lblNewOU.Text = if ($OU) { $OU } else { "(по умолчанию)" }
+
+    if ($ProxyEnabled) {
+        $lblNewProxy.Text = "$ProxyAddr`:$ProxyPort"
+    } else {
+        $lblNewProxy.Text = "Не настроен"
+    }
+
+    # Переменная для результата
+    $script:confirmResult = $false
+
+    $btnConfirmApply.Add_Click({
+        $script:confirmResult = $true
+        $confirmWindow.DialogResult = $true
+        $confirmWindow.Close()
+    })
+
+    $btnConfirmCancel.Add_Click({
+        $script:confirmResult = $false
+        $confirmWindow.DialogResult = $false
+        $confirmWindow.Close()
+    })
+
+    # Показываем окно
+    $confirmWindow.ShowDialog() | Out-Null
+
+    return $script:confirmResult
+}
+# -----------------------------------------------------------------------
+
 # Обработчик кнопки "Далее"
 $btnNext.Add_Click({
-    # Проверяем, на каком мы шаге
     if ($step1.Visibility -eq [System.Windows.Visibility]::Visible) {
         # --- ШАГ 1: Валидация IP-параметров ---
         $ip = $txtIP.Text.Trim()
@@ -305,9 +467,10 @@ $btnNext.Add_Click({
         }
 
         # Проверка прокси (если включена)
-        if ($chkProxy.IsChecked) {
-            $proxyAddr = $txtProxyAddress.Text.Trim()
-            $proxyPort = $txtProxyPort.Text.Trim()
+        $proxyEnabled = $chkProxy.IsChecked
+        $proxyAddr = $txtProxyAddress.Text.Trim()
+        $proxyPort = $txtProxyPort.Text.Trim()
+        if ($proxyEnabled) {
             if (-not $proxyAddr -or -not $proxyPort) {
                 [System.Windows.MessageBox]::Show("Для настройки прокси заполните адрес и порт.", "Ошибка", "OK", "Error")
                 return
@@ -324,9 +487,37 @@ $btnNext.Add_Click({
             if ($res -eq 'No') { return }
         }
 
-        # Все проверки пройдены – закрываем окно с успехом
-        $window.DialogResult = $true
-        $window.Close()
+        # ---------------------------------------------------------------
+        # НОВОЕ: Получение текущих значений для отображения в окне подтверждения
+        # ---------------------------------------------------------------
+        # Определяем индекс выбранного адаптера
+        $selectedAdapterString = $cmbAdapters.SelectedItem
+        $adapterIndex = [int]($selectedAdapterString -split '\(Index ')[1] -replace '\)',''
+
+        # Текущие сетевые параметры
+        $currentIPObj = Get-NetIPAddress -InterfaceIndex $adapterIndex -AddressFamily IPv4 | Where-Object { $_.PrefixOrigin -ne 'WellKnown' } | Select-Object -First 1
+        $currentIP = if ($currentIPObj) { $currentIPObj.IPAddress } else { $null }
+        $currentPrefix = if ($currentIPObj) { $currentIPObj.PrefixLength } else { $null }
+        $currentGatewayObj = Get-NetRoute -InterfaceIndex $adapterIndex -DestinationPrefix '0.0.0.0/0' | Select-Object -First 1
+        $currentGateway = if ($currentGatewayObj) { $currentGatewayObj.NextHop } else { $null }
+        $currentDNS = Get-DnsClientServerAddress -InterfaceIndex $adapterIndex -AddressFamily IPv4 | Select-Object -First 1
+        $currentDNS1 = if ($currentDNS.ServerAddresses.Count -gt 0) { $currentDNS.ServerAddresses[0] } else { $null }
+        $currentDNS2 = if ($currentDNS.ServerAddresses.Count -gt 1) { $currentDNS.ServerAddresses[1] } else { $null }
+
+        # Текущее имя компьютера
+        $currentName = $env:COMPUTERNAME
+
+        # Показываем окно подтверждения
+        $confirmResult = Show-ConfirmationWindow -CurrentIP $currentIP -CurrentPrefix $currentPrefix -CurrentGateway $currentGateway -CurrentDNS1 $currentDNS1 -CurrentDNS2 $currentDNS2 -NewIP $txtIP.Text.Trim() -NewPrefix $txtPrefix.Text.Trim() -NewGateway $txtGateway.Text.Trim() -NewDNS1 $txtDNS1.Text.Trim() -NewDNS2 $txtDNS2.Text.Trim() -CurrentName $currentName -NewName $compName -Domain $domain -OU $ou -ProxyEnabled $proxyEnabled -ProxyAddr $proxyAddr -ProxyPort $proxyPort
+
+        if ($confirmResult) {
+            # Пользователь подтвердил – закрываем мастер с успехом
+            $window.DialogResult = $true
+            $window.Close()
+        } else {
+            # Пользователь отменил – ничего не делаем, остаёмся на шаге 2
+            return
+        }
     }
 })
 
