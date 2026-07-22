@@ -1,0 +1,23 @@
+# Visual Studio служебные папки
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Результаты сборки
+bin/
+obj/
+Debug/
+Release/
+
+# Кэш и логи
+*.cache
+*.log
+
+# Папка бэкапов (создаваемая скриптом)
+NetworkBackup/
+
+# Системные файлы Windows
+Thumbs.db
+Desktop.ini

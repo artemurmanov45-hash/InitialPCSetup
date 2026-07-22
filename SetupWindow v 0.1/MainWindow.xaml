@@ -1,0 +1,78 @@
+﻿<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Первоначальная настройка ПК" Height="414" Width="561"
+        WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
+        FontFamily="Segoe UI" FontSize="12">
+    <Grid Margin="15,15,15,15">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Группа IP -->
+        <GroupBox Header="Параметры IP" Grid.Row="0" Padding="10" Margin="0,0,0,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                </Grid.RowDefinitions>
+
+                <Label Grid.Row="0" Grid.Column="0" Content="IP-адрес:" VerticalAlignment="Center"/>
+                <TextBox x:Name="txtIP" Grid.Row="0" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center" Grid.IsSharedSizeScope="True"/>
+
+                <Label Grid.Row="1" Grid.Column="0" Content="Префикс:" VerticalAlignment="Center"/>
+                <TextBox x:Name="txtPrefix" Grid.Row="1" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center" Text="24" Width="60" HorizontalAlignment="Left"/>
+
+                <Label Grid.Row="2" Grid.Column="0" Content="Шлюз:" VerticalAlignment="Center"/>
+                <TextBox x:Name="txtGateway" Grid.Row="2" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
+
+                <Label Grid.Row="3" Grid.Column="0" Content="DNS (предпоч.)" VerticalAlignment="Center"/>
+                <TextBox x:Name="txtDNS1" Grid.Row="3" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
+
+                <Label Grid.Row="4" Grid.Column="0" Content="DNS (запасной)" VerticalAlignment="Center"/>
+                <TextBox x:Name="txtDNS2" Grid.Row="4" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
+            </Grid>
+        </GroupBox>
+
+        <!-- Группа ПК/Домен -->
+        <GroupBox Header="Компьютер и домен" Grid.Row="1" Padding="10" Margin="0,0,0,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="30"/>
+                </Grid.RowDefinitions>
+
+                <Label Grid.Row="0" Grid.Column="0" Content="Новое имя ПК:" VerticalAlignment="Center"/>
+                <TextBox x:Name="txtComputerName" Grid.Row="0" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
+
+                <Label Grid.Row="1" Grid.Column="0" Content="Домен:" VerticalAlignment="Center"/>
+                <TextBox x:Name="txtDomain" Grid.Row="1" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
+            </Grid>
+        </GroupBox>
+
+        <!-- Кнопка OK -->
+        <StackPanel Grid.Row="3" HorizontalAlignment="Center" Margin="0,10,0,0">
+            <Button x:Name="btnOK" Content="OK" Width="100" Height="30" IsDefault="True" BorderBrush="White">
+                <Button.Background>
+                    <LinearGradientBrush EndPoint="0.5,1" StartPoint="0.5,0">
+                        <GradientStop Color="Black"/>
+                        <GradientStop Color="#FFBFBBBB" Offset="1"/>
+                    </LinearGradientBrush>
+                </Button.Background>
+            </Button>
+        </StackPanel>
+    </Grid>
+</Window>
