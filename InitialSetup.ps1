@@ -1,7 +1,7 @@
 ﻿<#
 .SYNOPSIS
-    Бэкап, настройка IP, ввод в домен, прокси, выбор OU, авто-поиск свободного IP.
-    Версия 2.0 (с улучшениями)
+    Бэкап, настройка IP, ввод в домен, прокси, выбор OU.
+    Версия 2.1 (двухшаговый мастер)
 #>
 
 # === ПРОВЕРКА ПРАВ АДМИНИСТРАТОРА И АВТО-ПЕРЕЗАПУСК ===
@@ -31,7 +31,7 @@ if (-not $adapters) {
     exit 1
 }
 
-# === 2. ФУНКЦИИ ВАЛИДАЦИИ (НОВОЕ) ===
+# === 2. ФУНКЦИИ ВАЛИДАЦИИ ===
 function Test-ValidIP {
     param([string]$IP)
     $regex = '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
@@ -49,42 +49,7 @@ function Test-ValidComputerName {
     return ($Name -match $regex)
 }
 
-# === 3. ФУНКЦИЯ ПОИСКА СВОБОДНОГО IP (НОВОЕ) ===
-function Find-FreeIP {
-    param($Gateway, $PrefixLength)
-    # Вычисляем диапазон по шлюзу и маске
-    $gwBytes = [IPAddress]::Parse($Gateway).GetAddressBytes()
-    $maskBytes = switch ($PrefixLength) {
-        24 { @(255,255,255,0) }
-        16 { @(255,255,0,0) }
-        8  { @(255,0,0,0) }
-        default { # для упрощения только /24,/16,/8, но можно расширить
-            Write-Host "Автопоиск поддерживается только для /8, /16, /24" -ForegroundColor Yellow
-            return $null
-        }
-    }
-    $network = @()
-    $broadcast = @()
-    for ($i=0; $i -lt 4; $i++) {
-        $network += $gwBytes[$i] -band $maskBytes[$i]
-        $broadcast += $gwBytes[$i] -bor (-bnot $maskBytes[$i] -band 0xFF)
-    }
-    $first = $network.Clone()
-    $first[3] += 1
-    $last = $broadcast.Clone()
-    $last[3] -= 1
-
-    # Перебираем адреса от first до last и пингуем
-    for ($i = $first[3]; $i -le $last[3]; $i++) {
-        $testIP = "$($first[0]).$($first[1]).$($first[2]).$i"
-        if (-not (Test-Connection -ComputerName $testIP -Count 1 -Quiet -ErrorAction SilentlyContinue)) {
-            return $testIP
-        }
-    }
-    return $null
-}
-
-# === 4. ФУНКЦИЯ ПРОВЕРКИ ДОСТУПНОСТИ DC (НОВОЕ) ===
+# === 3. ФУНКЦИЯ ПРОВЕРКИ ДОСТУПНОСТИ DC ===
 function Test-DomainController {
     param($Domain)
     try {
@@ -98,133 +63,129 @@ function Test-DomainController {
     return $false
 }
 
-# === 5. WPF ОКНО (расширенное) ===
+# === 4. WPF ОКНО (ДВУХШАГОВЫЙ МАСТЕР) ===
 Add-Type -AssemblyName PresentationFramework
 
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Первоначальная настройка ПК v2.0" Height="730" Width="600"
+        Title="Мастер первоначальной настройки ПК v2.1" Height="500" Width="580"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
         FontFamily="Segoe UI" FontSize="12">
     <Grid Margin="10">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Группа "Сетевой адаптер" (НОВОЕ) -->
-        <GroupBox Header="Сетевой адаптер" Grid.Row="0" Padding="10" Margin="0,0,0,10">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <Label Grid.Column="0" Content="Выберите адаптер:" VerticalAlignment="Center"/>
-                <ComboBox x:Name="cmbAdapters" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
-                <Button x:Name="btnRefreshAdapters" Grid.Column="2" Content="Обновить" Margin="10,2,0,2" Width="80"/>
-            </Grid>
-        </GroupBox>
+        <!-- Заголовок шага -->
+        <TextBlock x:Name="lblStep" Grid.Row="0" FontWeight="Bold" FontSize="14" Margin="0,0,0,10"/>
 
-        <!-- Группа IP -->
-        <GroupBox Header="Параметры IP" Grid.Row="1" Padding="10" Margin="0,0,0,10">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="30"/>
-                    <RowDefinition Height="30"/>
-                    <RowDefinition Height="30"/>
-                    <RowDefinition Height="30"/>
-                    <RowDefinition Height="30"/>
-                </Grid.RowDefinitions>
+        <!-- Контейнер для шагов -->
+        <Grid Grid.Row="1">
+            <!-- ШАГ 1: Сетевые параметры -->
+            <StackPanel x:Name="step1" Visibility="Visible">
+                <GroupBox Header="Сетевой адаптер" Padding="10" Margin="0,0,0,10">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Label Grid.Column="0" Content="Выберите адаптер:" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="cmbAdapters" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
+                        <Button x:Name="btnRefreshAdapters" Grid.Column="2" Content="Обновить" Margin="10,2,0,2" Width="80"/>
+                    </Grid>
+                </GroupBox>
 
-                <Label Grid.Row="0" Grid.Column="0" Content="Новый IP-адрес:" VerticalAlignment="Center"/>
-                <TextBox x:Name="txtIP" Grid.Row="0" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
-                <Button x:Name="btnFindFreeIP" Grid.Row="0" Grid.Column="2" Content="Найти свободный" Margin="5,2,0,2" Width="120" ToolTip="Ищет свободный IP в подсети шлюза"/>
+                <GroupBox Header="Параметры IP" Padding="10" Margin="0,0,0,10">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="30"/>
+                            <RowDefinition Height="30"/>
+                            <RowDefinition Height="30"/>
+                            <RowDefinition Height="30"/>
+                            <RowDefinition Height="30"/>
+                        </Grid.RowDefinitions>
 
-                <Label Grid.Row="1" Grid.Column="0" Content="Новая маска (префикс):" VerticalAlignment="Center"/>
-                <TextBox x:Name="txtPrefix" Grid.Row="1" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center" Text="24" Width="60" HorizontalAlignment="Left"/>
+                        <Label Grid.Row="0" Grid.Column="0" Content="Новый IP-адрес:" VerticalAlignment="Center"/>
+                        <TextBox x:Name="txtIP" Grid.Row="0" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
 
-                <Label Grid.Row="2" Grid.Column="0" Content="Новый шлюз:" VerticalAlignment="Center"/>
-                <TextBox x:Name="txtGateway" Grid.Row="2" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
+                        <Label Grid.Row="1" Grid.Column="0" Content="Новая маска (префикс):" VerticalAlignment="Center"/>
+                        <TextBox x:Name="txtPrefix" Grid.Row="1" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center" Text="24" Width="60" HorizontalAlignment="Left"/>
 
-                <Label Grid.Row="3" Grid.Column="0" Content="Новый DNS (предпоч.):" VerticalAlignment="Center"/>
-                <TextBox x:Name="txtDNS1" Grid.Row="3" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
+                        <Label Grid.Row="2" Grid.Column="0" Content="Новый шлюз:" VerticalAlignment="Center"/>
+                        <TextBox x:Name="txtGateway" Grid.Row="2" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
 
-                <Label Grid.Row="4" Grid.Column="0" Content="Новый DNS (запасной):" VerticalAlignment="Center"/>
-                <TextBox x:Name="txtDNS2" Grid.Row="4" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
-            </Grid>
-        </GroupBox>
+                        <Label Grid.Row="3" Grid.Column="0" Content="Новый DNS (предпоч.):" VerticalAlignment="Center"/>
+                        <TextBox x:Name="txtDNS1" Grid.Row="3" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
 
-        <!-- Группа ПК/Домен (добавлено OU) -->
-        <GroupBox Header="Компьютер и домен" Grid.Row="2" Padding="10" Margin="0,0,0,10">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="30"/>
-                    <RowDefinition Height="30"/>
-                    <RowDefinition Height="30"/>
-                </Grid.RowDefinitions>
+                        <Label Grid.Row="4" Grid.Column="0" Content="Новый DNS (запасной):" VerticalAlignment="Center"/>
+                        <TextBox x:Name="txtDNS2" Grid.Row="4" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
+                    </Grid>
+                </GroupBox>
+            </StackPanel>
 
-                <Label Grid.Row="0" Grid.Column="0" Content="Новое имя ПК:" VerticalAlignment="Center"/>
-                <TextBox x:Name="txtComputerName" Grid.Row="0" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
+            <!-- ШАГ 2: Компьютер, домен, прокси -->
+            <StackPanel x:Name="step2" Visibility="Collapsed">
+                <GroupBox Header="Компьютер и домен" Padding="10" Margin="0,0,0,10">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="30"/>
+                            <RowDefinition Height="30"/>
+                            <RowDefinition Height="30"/>
+                        </Grid.RowDefinitions>
 
-                <Label Grid.Row="1" Grid.Column="0" Content="Новый домен:" VerticalAlignment="Center"/>
-                <TextBox x:Name="txtDomain" Grid.Row="1" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
+                        <Label Grid.Row="0" Grid.Column="0" Content="Новое имя ПК:" VerticalAlignment="Center"/>
+                        <TextBox x:Name="txtComputerName" Grid.Row="0" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
 
-                <Label Grid.Row="2" Grid.Column="0" Content="OU (подразделение):" VerticalAlignment="Center" ToolTip="Оставьте пустым для размещения в контейнере по умолчанию"/>
-                <TextBox x:Name="txtOU" Grid.Row="2" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
-            </Grid>
-        </GroupBox>
+                        <Label Grid.Row="1" Grid.Column="0" Content="Новый домен:" VerticalAlignment="Center"/>
+                        <TextBox x:Name="txtDomain" Grid.Row="1" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
 
-        <!-- Группа Прокси (НОВОЕ) -->
-        <GroupBox Header="Настройка прокси (опционально)" Grid.Row="3" Padding="10" Margin="0,0,0,10">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="30"/>
-                    <RowDefinition Height="30"/>
-                </Grid.RowDefinitions>
+                        <Label Grid.Row="2" Grid.Column="0" Content="OU (подразделение):" VerticalAlignment="Center" ToolTip="Оставьте пустым для контейнера по умолчанию"/>
+                        <TextBox x:Name="txtOU" Grid.Row="2" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center"/>
+                    </Grid>
+                </GroupBox>
 
-                <CheckBox x:Name="chkProxy" Grid.Row="0" Grid.ColumnSpan="3" Content="Настроить системный прокси" VerticalAlignment="Center" Margin="0,2,0,2"/>
-                <Label Grid.Row="1" Grid.Column="0" Content="Адрес прокси:" VerticalAlignment="Center" IsEnabled="False"/>
-                <TextBox x:Name="txtProxyAddress" Grid.Row="1" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center" IsEnabled="False"/>
-                <Label Grid.Row="1" Grid.Column="2" Content="Порт:" VerticalAlignment="Center" IsEnabled="False" Margin="5,0,0,0"/>
-                <TextBox x:Name="txtProxyPort" Grid.Row="1" Grid.Column="2" Width="60" Margin="45,2,0,2" VerticalAlignment="Center" IsEnabled="False"/>
-            </Grid>
-        </GroupBox>
+                <GroupBox Header="Настройка прокси (опционально)" Padding="10" Margin="0,0,0,10">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="30"/>
+                            <RowDefinition Height="30"/>
+                        </Grid.RowDefinitions>
 
-        <!-- Прогресс-бар (НОВОЕ) -->
-        <ProgressBar x:Name="progressBar" Grid.Row="4" Height="20" Margin="0,5,0,10" IsIndeterminate="False" Minimum="0" Maximum="100" Value="0"/>
+                        <CheckBox x:Name="chkProxy" Grid.Row="0" Grid.ColumnSpan="3" Content="Настроить системный прокси" VerticalAlignment="Center" Margin="0,2,0,2"/>
+                        <Label Grid.Row="1" Grid.Column="0" Content="Адрес прокси:" VerticalAlignment="Center" IsEnabled="False"/>
+                        <TextBox x:Name="txtProxyAddress" Grid.Row="1" Grid.Column="1" Margin="10,2,0,2" VerticalAlignment="Center" IsEnabled="False"/>
+                        <Label Grid.Row="1" Grid.Column="2" Content="Порт:" VerticalAlignment="Center" IsEnabled="False" Margin="5,0,0,0"/>
+                        <TextBox x:Name="txtProxyPort" Grid.Row="1" Grid.Column="2" Width="60" Margin="45,2,0,2" VerticalAlignment="Center" IsEnabled="False"/>
+                    </Grid>
+                </GroupBox>
 
-        <!-- Кнопка OK -->
-        <StackPanel Grid.Row="5" HorizontalAlignment="Center" Margin="0,10,0,0" Orientation="Horizontal">
-            <Button x:Name="btnOK" Content="OK" Width="100" Height="30" IsDefault="True" Margin="0,0,10,0">
-                <Button.Background>
-                    <LinearGradientBrush EndPoint="0.5,1" StartPoint="0.5,0">
-                        <GradientStop Color="Black"/>
-                        <GradientStop Color="#FFBFBBBB" Offset="1"/>
-                    </LinearGradientBrush>
-                </Button.Background>
-            </Button>
-            <Button x:Name="btnCancel" Content="Отмена" Width="100" Height="30" IsCancel="True"/>
+                <!-- Прогресс-бар (только на шаге 2) -->
+                <ProgressBar x:Name="progressBar" Height="20" Margin="0,5,0,10" IsIndeterminate="False" Minimum="0" Maximum="100" Value="0"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- Кнопки навигации -->
+        <StackPanel Grid.Row="2" HorizontalAlignment="Center" Margin="0,10,0,0" Orientation="Horizontal">
+            <Button x:Name="btnBack" Content="Назад" Width="80" Height="30" Margin="0,0,10,0" IsEnabled="False"/>
+            <Button x:Name="btnNext" Content="Далее" Width="80" Height="30" Margin="0,0,10,0" IsDefault="True"/>
+            <Button x:Name="btnCancel" Content="Отмена" Width="80" Height="30" IsCancel="True"/>
         </StackPanel>
     </Grid>
 </Window>
@@ -248,10 +209,13 @@ $txtOU = $window.FindName("txtOU")
 $chkProxy = $window.FindName("chkProxy")
 $txtProxyAddress = $window.FindName("txtProxyAddress")
 $txtProxyPort = $window.FindName("txtProxyPort")
-$btnFindFreeIP = $window.FindName("btnFindFreeIP")
 $progressBar = $window.FindName("progressBar")
-$btnOK = $window.FindName("btnOK")
+$btnBack = $window.FindName("btnBack")
+$btnNext = $window.FindName("btnNext")
 $btnCancel = $window.FindName("btnCancel")
+$step1 = $window.FindName("step1")
+$step2 = $window.FindName("step2")
+$lblStep = $window.FindName("lblStep")
 
 # Заполнение списка адаптеров
 function UpdateAdapters {
@@ -280,93 +244,104 @@ $chkProxy.Add_Unchecked({
     $txtProxyPort.IsEnabled = $false
 })
 
-# Кнопка "Найти свободный IP"
-$btnFindFreeIP.Add_Click({
-    $gw = $txtGateway.Text.Trim()
-    $prefix = $txtPrefix.Text.Trim()
-    if (-not (Test-ValidIP $gw)) {
-        [System.Windows.MessageBox]::Show("Введите корректный IP шлюза перед поиском.", "Ошибка", "OK", "Error")
-        return
-    }
-    if (-not (Test-ValidPrefix $prefix)) {
-        [System.Windows.MessageBox]::Show("Введите корректный префикс (1-32).", "Ошибка", "OK", "Error")
-        return
-    }
-    $freeIP = Find-FreeIP -Gateway $gw -PrefixLength ([int]$prefix)
-    if ($freeIP) {
-        $txtIP.Text = $freeIP
-        [System.Windows.MessageBox]::Show("Найден свободный IP: $freeIP", "Успех", "OK", "Information")
+# Установка начального состояния мастера
+$lblStep.Text = "Шаг 1 из 2: Сетевые параметры"
+$btnBack.IsEnabled = $false
+$btnNext.Content = "Далее"
+$step1.Visibility = [System.Windows.Visibility]::Visible
+$step2.Visibility = [System.Windows.Visibility]::Collapsed
+
+# Обработчик кнопки "Далее"
+$btnNext.Add_Click({
+    # Проверяем, на каком мы шаге
+    if ($step1.Visibility -eq [System.Windows.Visibility]::Visible) {
+        # --- ШАГ 1: Валидация IP-параметров ---
+        $ip = $txtIP.Text.Trim()
+        $prefix = $txtPrefix.Text.Trim()
+        $gw = $txtGateway.Text.Trim()
+        $dns1 = $txtDNS1.Text.Trim()
+        $dns2 = $txtDNS2.Text.Trim()
+
+        if (-not (Test-ValidIP $ip)) {
+            [System.Windows.MessageBox]::Show("Некорректный IP-адрес.", "Ошибка", "OK", "Error")
+            return
+        }
+        if (-not (Test-ValidPrefix $prefix)) {
+            [System.Windows.MessageBox]::Show("Некорректный префикс (1-32).", "Ошибка", "OK", "Error")
+            return
+        }
+        if (-not (Test-ValidIP $gw)) {
+            [System.Windows.MessageBox]::Show("Некорректный шлюз.", "Ошибка", "OK", "Error")
+            return
+        }
+        if (-not (Test-ValidIP $dns1)) {
+            [System.Windows.MessageBox]::Show("Некорректный DNS1.", "Ошибка", "OK", "Error")
+            return
+        }
+        if ($dns2 -and -not (Test-ValidIP $dns2)) {
+            [System.Windows.MessageBox]::Show("Некорректный DNS2 (если не используется, оставьте пустым).", "Ошибка", "OK", "Error")
+            return
+        }
+
+        # Переход на шаг 2
+        $step1.Visibility = [System.Windows.Visibility]::Collapsed
+        $step2.Visibility = [System.Windows.Visibility]::Visible
+        $lblStep.Text = "Шаг 2 из 2: Компьютер и домен"
+        $btnBack.IsEnabled = $true
+        $btnNext.Content = "Готово"
     } else {
-        [System.Windows.MessageBox]::Show("Не удалось найти свободный IP в диапазоне.", "Предупреждение", "OK", "Warning")
+        # --- ШАГ 2: Валидация имени ПК, домена, прокси и проверка DC ---
+        $compName = $txtComputerName.Text.Trim()
+        $domain = $txtDomain.Text.Trim()
+        $ou = $txtOU.Text.Trim()
+
+        if (-not (Test-ValidComputerName $compName)) {
+            [System.Windows.MessageBox]::Show("Некорректное имя компьютера (до 15 символов, только буквы, цифры, дефис).", "Ошибка", "OK", "Error")
+            return
+        }
+        if (-not $domain) {
+            [System.Windows.MessageBox]::Show("Поле 'Домен' обязательно.", "Ошибка", "OK", "Error")
+            return
+        }
+
+        # Проверка прокси (если включена)
+        if ($chkProxy.IsChecked) {
+            $proxyAddr = $txtProxyAddress.Text.Trim()
+            $proxyPort = $txtProxyPort.Text.Trim()
+            if (-not $proxyAddr -or -not $proxyPort) {
+                [System.Windows.MessageBox]::Show("Для настройки прокси заполните адрес и порт.", "Ошибка", "OK", "Error")
+                return
+            }
+            if (-not ($proxyPort -match '^\d+$' -and [int]$proxyPort -gt 0 -and [int]$proxyPort -le 65535)) {
+                [System.Windows.MessageBox]::Show("Некорректный порт прокси.", "Ошибка", "OK", "Error")
+                return
+            }
+        }
+
+        # Проверка доступности контроллера домена
+        if (-not (Test-DomainController -Domain $domain)) {
+            $res = [System.Windows.MessageBox]::Show("Контроллер домена $domain не доступен. Продолжить?", "Предупреждение", "YesNo", "Warning")
+            if ($res -eq 'No') { return }
+        }
+
+        # Все проверки пройдены – закрываем окно с успехом
+        $window.DialogResult = $true
+        $window.Close()
     }
 })
 
-# Обработчик кнопки OK с валидацией
-$btnOK.Add_Click({
-    # Валидация
-    $ip = $txtIP.Text.Trim()
-    $prefix = $txtPrefix.Text.Trim()
-    $gw = $txtGateway.Text.Trim()
-    $dns1 = $txtDNS1.Text.Trim()
-    $dns2 = $txtDNS2.Text.Trim()
-    $compName = $txtComputerName.Text.Trim()
-    $domain = $txtDomain.Text.Trim()
-    $ou = $txtOU.Text.Trim()
-
-    if (-not (Test-ValidIP $ip)) {
-        [System.Windows.MessageBox]::Show("Некорректный IP-адрес.", "Ошибка", "OK", "Error")
-        return
+# Обработчик кнопки "Назад"
+$btnBack.Add_Click({
+    if ($step2.Visibility -eq [System.Windows.Visibility]::Visible) {
+        $step2.Visibility = [System.Windows.Visibility]::Collapsed
+        $step1.Visibility = [System.Windows.Visibility]::Visible
+        $lblStep.Text = "Шаг 1 из 2: Сетевые параметры"
+        $btnBack.IsEnabled = $false
+        $btnNext.Content = "Далее"
     }
-    if (-not (Test-ValidPrefix $prefix)) {
-        [System.Windows.MessageBox]::Show("Некорректный префикс (1-32).", "Ошибка", "OK", "Error")
-        return
-    }
-    if (-not (Test-ValidIP $gw)) {
-        [System.Windows.MessageBox]::Show("Некорректный шлюз.", "Ошибка", "OK", "Error")
-        return
-    }
-    if (-not (Test-ValidIP $dns1)) {
-        [System.Windows.MessageBox]::Show("Некорректный DNS1.", "Ошибка", "OK", "Error")
-        return
-    }
-    if ($dns2 -and -not (Test-ValidIP $dns2)) {
-        [System.Windows.MessageBox]::Show("Некорректный DNS2 (если не используется, оставьте пустым).", "Ошибка", "OK", "Error")
-        return
-    }
-    if (-not (Test-ValidComputerName $compName)) {
-        [System.Windows.MessageBox]::Show("Некорректное имя компьютера (до 15 символов, только буквы, цифры, дефис).", "Ошибка", "OK", "Error")
-        return
-    }
-    if (-not $domain) {
-        [System.Windows.MessageBox]::Show("Поле 'Домен' обязательно.", "Ошибка", "OK", "Error")
-        return
-    }
-
-    # Проверка доступности DC (НОВОЕ)
-    if (-not (Test-DomainController -Domain $domain)) {
-        $res = [System.Windows.MessageBox]::Show("Контроллер домена $domain не доступен. Продолжить?", "Предупреждение", "YesNo", "Warning")
-        if ($res -eq 'No') { return }
-    }
-
-    # Проверка прокси
-    if ($chkProxy.IsChecked) {
-        $proxyAddr = $txtProxyAddress.Text.Trim()
-        $proxyPort = $txtProxyPort.Text.Trim()
-        if (-not $proxyAddr -or -not $proxyPort) {
-            [System.Windows.MessageBox]::Show("Для настройки прокси заполните адрес и порт.", "Ошибка", "OK", "Error")
-            return
-        }
-        if (-not ($proxyPort -match '^\d+$' -and [int]$proxyPort -gt 0 -and [int]$proxyPort -le 65535)) {
-            [System.Windows.MessageBox]::Show("Некорректный порт прокси.", "Ошибка", "OK", "Error")
-            return
-        }
-    }
-
-    # Если всё ок, закрываем окно с успехом
-    $window.DialogResult = $true
-    $window.Close()
 })
 
+# Обработчик кнопки "Отмена"
 $btnCancel.Add_Click({
     $window.DialogResult = $false
     $window.Close()
@@ -430,7 +405,7 @@ Set-DnsClientServerAddress -InterfaceIndex $adapterIndex -ServerAddresses ($dns1
 Write-Host "IP $newIP/$prefixLength, шлюз $gateway, DNS $dns1 $dns2 применены." -ForegroundColor Green
 $progressBar.Value = 30
 
-# --- Настройка прокси (НОВОЕ) ---
+# --- Настройка прокси ---
 if ($proxyEnabled) {
     Write-Host "Настройка системного прокси..." -ForegroundColor Yellow
     $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
